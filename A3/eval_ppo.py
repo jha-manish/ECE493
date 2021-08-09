@@ -1,67 +1,91 @@
-"""
-Simple evaluation example.
+#!/usr/bin/env python3
 
-run: python eval_ppo.py --render
-
-Evaluate PPO1 policy (MLP input_dim x 64 x 64 x output_dim policy) against built-in AI
-
-"""
+# test ppo1-trained CNN agent on pixel version of the task
 
 import warnings
 # numpy warnings because of tensorflow
 warnings.filterwarnings("ignore", category=FutureWarning, module='tensorflow')
 warnings.filterwarnings("ignore", category=UserWarning, module='gym')
 
-import gym
 import numpy as np
 import argparse
-
+import gym
 import slimevolleygym
-from stable_baselines.common.policies import MlpPolicy
-from stable_baselines import PPO1
+from slimevolleygym import FrameStack, render_atari
 
-def rollout(env, policy, render_mode=False):
-  """ play one agent vs the other in modified gym-style loop. """
-  obs = env.reset()
+from stable_baselines.common.policies import CnnPolicy
+from stable_baselines.common.atari_wrappers import ClipRewardEnv, NoopResetEnv, MaxAndSkipEnv, WarpFrame
+from stable_baselines.a2c import a2c
 
-  done = False
-  total_reward = 0
+from time import sleep
 
-  while not done:
+SEED = 831
 
-    action, _states = policy.predict(obs, deterministic=True)
-    obs, reward, done, _ = env.step(action)
+RENDER_MODE = True
 
-    total_reward += reward
+viewer = None
+RENDER_ATARI = True # Render the game using the actual downsampled 84x84x4 greyscale inputs
 
-    if render_mode:
-      env.render()
+cv2 = None
+rendering = None
+if RENDER_ATARI or RENDER_MODE:
+  import cv2
+  from gym.envs.classic_control import rendering as rendering
 
-  return total_reward
-
-if __name__=="__main__":
-
-  parser = argparse.ArgumentParser(description='Evaluate pre-trained PPO agent.')
-  parser.add_argument('--model-path', help='path to stable-baselines model.',
-                        type=str, default="zoo/ppo/best_model.zip")
-  parser.add_argument('--render', action='store_true', help='render to screen?', default=False)
-
-  args = parser.parse_args()
-  render_mode = args.render
-
+def make_env(seed):
   env = gym.make("SlimeVolley-v0")
+  env = NoopResetEnv(env, noop_max=30)
+  env = MaxAndSkipEnv(env, skip=4)
+  env = WarpFrame(env)
+  env = FrameStack(env, 4)
+  env.seed(seed)
+  return env
 
-  # the yellow agent:
-  print("Loading", args.model_path)
-  policy = PPO1.load(args.model_path, env=env) # 96-core PPO1 policy
+def rollout(env, model):
+  obs = env.reset()
+  if RENDER_MODE:
+    env.render()
+  cumulative_reward = 0
+  done = False
+  while not done:
+    action, _states = model.predict(obs, deterministic=True)
+    obs, reward, done, info = env.step(action)
+    cumulative_reward += reward
+    if RENDER_MODE:
+      env.render()
+    if RENDER_ATARI:
+      viewer.imshow(render_atari(obs))
+    if RENDER_MODE or RENDER_ATARI:
+      sleep(0.08)
 
-  history = []
+  return cumulative_reward
+
+if __name__ == '__main__':
+
+  parser = argparse.ArgumentParser(description='Evaluate pre-trained PPO1 CNN agent.')
+  parser.add_argument('--model-path', help='path to stable-baselines model.',
+                        type=str, default="training_scripts/a2c/best_model.zip")
+  parser.add_argument('--seed', help='random seed (integer)', type=int, default=721)
+  args = parser.parse_args()
+
+  SEED = args.seed
+  env = make_env(SEED)
+  model = a2c.A2C.load(args.model_path)
+  print(env.action_space)
+  print(model.action_space)
+
+  if RENDER_ATARI:
+    viewer = rendering.SimpleImageViewer(maxwidth=2160)
+
+  rewards = []
   for i in range(1000):
-    env.seed(seed=i)
-    cumulative_score = rollout(env, policy, render_mode)
-    print("cumulative score #", i, ":", cumulative_score)
-    history.append(cumulative_score)
+    cumulative_reward = rollout(env, model)
+    print(i, cumulative_reward)
+    rewards.append(cumulative_reward)
 
-  print("history dump:", history)
-  # this is what I got: [1, 1, 1, 0, 1, 1, 1, 0, 0, 0, 1, 2, 1, 1, 1, 1, 4, 0, 0, 0, 2, 2, 0, 1, 2, 2, 2, 1, 2, 1, 0, 2, 0, 1, 1, 1, 0, 0, 1, 0, 1, 2, 0, 0, 1, 1, 4, 1, 0, 2, 2, 3, 2, 4, 4, 1, 1, 2, 0, 0, 0, 4, 1, 1, 2, 0, 1, 1, 1, 2, 1, 1, 3, 2, 0, 1, 1, 1, 2, 2, 1, 1, 0, 0, 0, 1, 1, 1, 2, 5, 3, 3, 0, 0, 1, 0, 0, 2, 2, 1, 2, 1, 1, 0, 1, 0, 1, 1, 2, 2, 1, 3, 4, 0, 0, 0, 3, 0, 1, 5, 2, 4, 0, 1, 1, 1, 3, 0, 1, 2, 1, 1, 2, 1, 1, 2, 0, 1, 1, 0, 1, 0, 1, 2, 0, 2, 0, 2, 1, 1, 1, 0, 0, 0, 2, 2, 1, 0, 0, 0, 3, 0, 1, 3, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 1, 1, 1, 0, 0, 0, 0, 2, 0, 1, 2, 1, 0, 0, 1, 2, 0, 2, 1, 0, 1, 2, 2, 0, 2, 1, 1, 0, 0, 0, 1, 1, 1, 0, 1, 2, 0, 1, 1, 0, 2, 1, 0, 1, 0, 1, 0, 1, 3, 2, 2, 1, 2, 0, 2, 2, 0, 1, 0, 1, 0, 0, 2, 1, 2, 1, 0, 2, 1, 0, 1, 0, 2, 1, 1, 1, 2, 2, 2, 1, 1, 0, 1, 1, 0, 0, 0, 1, 1, 2, 1, 1, 1, 0, 0, 1, 0, 1, 1, 0, 2, 0, 2, 0, 0, 1, 1, 0, 1, 2, 1, 0, 2, 3, 3, 4, 0, 0, 1, 0, 1, 1, 2, 0, 1, 0, 1, 0, 2, 1, 0, 3, 0, 0, 1, 1, 1, 2, 2, 0, 0, 2, 0, 0, 1, 2, 4, 0, 2, 0, 1, 1, 1, 0, 1, 2, 1, 0, 0, 4, 1, 0, 0, 0, 0, 2, 1, 1, 1, 3, 1, 1, 1, 2, 1, 1, 1, 2, 1, 0, 1, 1, 2, 0, 0, 0, 1, 4, 2, 3, 0, 3, 1, 0, 0, 1, 2, 2, 1, 0, 0, 1, 2, 0, 2, 1, 0, 1, 0, 0, 0, 1, 0, 2, 1, 2, 0, 1, 1, 2, 1, 0, 1, 0, 1, 1, 2, 0, 2, 0, 0, 1, 1, 0, 0, 2, 0, 2, 0, 1, 2, 2, 3, 1, 1, 0, 0, 1, 1, 4, 2, 1, 1, 1, 1, 1, 0, 0, 0, 1, 0, 1, 2, 3, 0, 0, 2, 2, 0, 3, 1, 0, 2, 0, 1, 0, 0, 2, 1, 2, 3, 1, 0, 1, 0, 1, 2, 1, 0, 2, 0, 0, 1, 0, 0, 1, 1, 1, 0, 2, 1, 0, 2, 2, 0, 1, 0, 1, 0, 5, 2, 2, 0, 1, 2, 0, 2, 0, 0, 0, 1, 0, 0, 1, 0, 2, 2, 1, 0, 1, 1, 2, 0, 0, 2, 0, 0, 3, 2, 2, -1, 3, 1, 1, 2, 0, 0, 2, 1, 1, 0, 1, 1, 3, 0, 2, 1, 1, 0, 3, 2, 1, 0, 2, 1, 2, 0, 1, 0, 2, 0, 2, 0, 3, 0, 0, 1, 0, 0, 1, 0, 0, 0, 2, 1, 2, 0, 3, 0, 2, 0, 1, 2, 1, 0, 0, 1, 2, 1, 0, 0, 4, 3, 0, 2, 1, 0, 0, 0, 2, 2, 1, 1, 0, 0, 2, 1, 0, 2, 2, 1, 0, 2, 1, 1, 1, 1, 1, 2, 1, 1, 1, 2, 2, 1, 0, 0, 0, 1, 1, 1, 0, 0, 1, 0, 1, 1, 2, 0, 0, 0, 2, 2, 2, 0, 0, 4, 3, 0, 0, 1, 0, 1, 1, 3, 3, 1, 0, 1, 1, 0, 0, 3, 3, 0, 2, 3, 1, 2, 1, 3, 2, 0, 0, 1, 1, 0, 1, 0, 0, 0, 0, 2, 0, 1, 1, 2, 1, 3, 1, 2, 0, -1, 0, 1, 0, 1, 4, 4, 0, 0, 0, 1, 0, 1, 0, 1, 3, 1, 0, 1, 1, 1, 0, 1, 1, 0, 2, 0, 2, 0, 0, 2, 1, 1, 1, 0, 1, 3, 1, 0, 0, 0, 1, 1, 0, 1, 2, 0, 2, 2, 0, 1, 0, 2, 3, 1, 1, 1, 1, 0, 2, 2, 1, 2, 0, 0, 2, 0, 1, 3, 0, 1, 0, 1, 0, 1, 0, 0, 2, 1, 2, 0, 2, 1, 1, 3, 1, 2, 2, 0, 1, 0, 2, 0, 1, 2, 0, 1, 2, 1, 0, 0, 0, 2, 0, 0, 2, 0, 0, 0, 0, 0, 1, 0, 0, 1, 2, 1, 2, 0, 0, 0, 2, 1, 1, 3, 1, 2, 2, 2, 2, 0, 1, 1, 1, 2, 0, 1, 4, 0, 0, 0, 1, 4, 0, 1, 4, 1, 2, 1, 1, 3, 3, 3, 4, 1, 0, 1, 0, 0, 3, 1, 4, 1, 3, 1, 1, 1, 0, 2, 4, 1, 0, 3, 2, 1, 0, 0, 3, 1, 2, 0, 0, 0, 4, 0, 1, 0, 1, 1, 0, 0, 0, 0, 2, 1, 1, 0, 2, 3, 0, 1, 0, 1, 1, 2, 0, 1, 1, 1, 2, 1, 2, 1, 1, 1, 1, 2, 0, 0, 1, 0, 0, 1, 2, 1, 3, 2, 0, 2, 0, 0, 0, 0, 1, 0, 2, 0, 1, 0, 1, 0, 1, 0, 0, 2, 1, 1, 2, 0, 1, 1, 1, 1, 2, 1, 0, 1, 0, 2, 3, 3, 0, -1, 2, 0, 1, 1, 3, 0, 1, 0, 0, 3, 0, 2, 0, 0, 1, 0, 2, 2, -1, 1, 0, 0, 1, 0, 1, 1, 0, 2, 1, 3, 1, 0, 2, 2, 1, 1, 1, 1, 1, 3, 1, 1, 2, 0, 2, 2, 1, 0, 0, 2, 0, 1, 2, 3, 2, 3, 0, 3, 2, 3, 2]
-  print("average score", np.mean(history), "standard_deviation", np.std(history))
+  print("mean", np.mean(rewards))
+  print("stdev", np.std(rewards))
+
+  env.close()
+  if RENDER_ATARI:
+    viewer.close()
